@@ -1,0 +1,17 @@
+# Build artifacts
+/target
+
+# Runtime configuration (config.example.yaml is the committed template)
+config.yaml
+
+# Query log databases and WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# Blocklist cache written by `voidgate update-lists`
+/cache/
+
+# Editor / OS noise
+*.swp
+.DS_Store

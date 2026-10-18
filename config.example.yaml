@@ -1,0 +1,73 @@
+# voidgate configuration template.
+# Copy to config.yaml and adjust for your network; see README.md.
+
+server:
+  # Bind address. The example serves loopback only; to serve a LAN bind a
+  # private address AND keep allowed_clients tight.
+  listen: "127.0.0.1"
+  # 5353 for development, 53 in production.
+  port: 5353
+  # Only these clients may query the server. Required, must not be empty.
+  # Clients outside every range are refused (see acl_action).
+  allowed_clients:
+    - "127.0.0.0/8"
+    - "::1/128"
+    - "192.168.1.0/24"
+  # refuse: reply REFUSED | drop: send no response at all
+  acl_action: refuse
+  upstream: "1.1.1.1"
+  upstream_port: 53
+  timeout_ms: 2000
+  # Cap on in-flight upstream queries (resolver semaphore).
+  max_concurrent_queries: 256
+  # TTL attached to sinkhole answers (0.0.0.0 / ::).
+  sinkhole_ttl_secs: 60
+
+blocklists:
+  # `voidgate update-lists` writes fetched lists here (temp file + rename).
+  cache_dir: "cache"
+  # How often the running server re-fetches URL lists and hot-swaps them.
+  # 0 disables the timer (SIGHUP still reloads the local cache).
+  refresh_interval_secs: 86400
+  lists:
+    - name: stevenblack
+      type: url
+      source: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+    - name: local-ads
+      type: file
+      source: "lists/local-ads.txt"
+
+# Per-client policies. Overlaps are resolved by longest prefix, so the /32
+# entries below win over the /24. A `match` entry repeated in two policies is
+# a config error; ranges outside allowed_clients produce a startup warning.
+policies:
+  - name: kids
+    match:
+      - "192.168.1.50/32"
+      - "192.168.1.51/32"
+    blocklists: [stevenblack, local-ads]
+    # Never blocked (domain and all subdomains):
+    allowlist: ["ads.example.com"]
+    # Always blocked (domain and all subdomains):
+    denylist: []
+  - name: iot
+    match:
+      - "192.168.1.0/24"
+    blocklists: [stevenblack]
+
+# Applies to clients no policy matches. Decision precedence everywhere:
+# allowlist > denylist > blocklist > forward.
+default_policy:
+  blocklists: [stevenblack]
+  allowlist: []
+  denylist: []
+
+storage:
+  db_path: "voidgate.db"
+  # false = serve without writing query rows.
+  log_queries: true
+  # Rows older than this are pruned at startup and hourly; 0 = keep forever.
+  retention_days: 30
+
+# tracing filter: "info", "debug", or a full env-filter like "voidgate=debug"
+log_level: "info"
