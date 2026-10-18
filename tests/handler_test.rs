@@ -8,12 +8,10 @@ mod common;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
-use tokio::time::sleep;
 use voidgate::blocklists::BlocklistStore;
 use voidgate::config::{AclAction, AppConfig};
 use voidgate::handler::{handle_query, AppState};
@@ -431,32 +429,6 @@ async fn handle_query_never_panics_on_odd_input() {
         // Must not panic; either a reply or a silent drop is acceptable.
         let _ = handle_query(&state, client(), &input).await;
     }
-}
-
-#[tokio::test]
-async fn permit_exhaustion_answers_servfail_immediately() {
-    let config = config_with_upstream(UpstreamBehavior::Silent).await;
-    let mut config = config;
-    config.server.max_concurrent_queries = 1;
-    let state = make_state(&config, &[]);
-
-    let request = common::build_query(0x0bad, "example.com.", RecordType::A);
-
-    let held = {
-        let state = state.clone();
-        let request = request.clone();
-        tokio::spawn(async move { handle_query(&state, client(), &request).await })
-    };
-    // Give the first query time to acquire the only permit.
-    sleep(Duration::from_millis(100)).await;
-
-    let bytes = handle_query(&state, client(), &request)
-        .await
-        .expect("second query should get a reply");
-    let reply = common::parse_response(&bytes);
-    assert_eq!(reply.metadata.response_code, ResponseCode::ServFail);
-
-    held.abort();
 }
 
 #[tokio::test]

@@ -11,8 +11,8 @@
 //! - per-query timeout from `server.timeout_ms`, surfaced as
 //!   [`ResolverError::Timeout`] — never a panic.
 //!
-//! In-flight concurrency is capped by the handler's `tokio::sync::Semaphore`
-//! (`server.max_concurrent_queries`), not here.
+//! In-flight concurrency is capped by the listener's `tokio::sync::Semaphore`
+//! (`server.max_inflight`), not here.
 
 pub mod error;
 

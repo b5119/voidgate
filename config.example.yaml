@@ -18,8 +18,11 @@ server:
   upstream: "1.1.1.1"
   upstream_port: 53
   timeout_ms: 2000
-  # Cap on in-flight upstream queries (resolver semaphore).
-  max_concurrent_queries: 256
+  # Cap on queries handled concurrently (listener semaphore). A packet that
+  # arrives while every permit is taken is dropped, not queued.
+  max_inflight: 256
+  # How long to wait for in-flight queries after a shutdown signal (ms).
+  shutdown_grace_ms: 2000
   # TTL attached to sinkhole answers (0.0.0.0 / ::).
   sinkhole_ttl_secs: 60
 

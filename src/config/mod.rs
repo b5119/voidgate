@@ -76,8 +76,15 @@ pub struct ServerConfig {
     pub upstream_port: u16,
     /// Per-query upstream timeout in milliseconds.
     pub timeout_ms: u64,
-    /// Maximum number of in-flight upstream queries (resolver semaphore size).
-    pub max_concurrent_queries: usize,
+    /// Maximum number of queries processed concurrently (the listener's
+    /// in-flight semaphore). Packets that arrive when every permit is taken
+    /// are dropped rather than spawning unbounded tasks. Must be greater
+    /// than 0.
+    pub max_inflight: usize,
+    /// How long, in milliseconds, to wait for in-flight queries to finish
+    /// after a shutdown signal before abandoning them. Must be greater
+    /// than 0.
+    pub shutdown_grace_ms: u64,
     /// TTL in seconds attached to sinkhole answers (`0.0.0.0` / `::`).
     pub sinkhole_ttl_secs: u32,
 }
@@ -94,7 +101,8 @@ impl Default for ServerConfig {
             upstream: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             upstream_port: 53,
             timeout_ms: 2000,
-            max_concurrent_queries: 256,
+            max_inflight: 256,
+            shutdown_grace_ms: 2000,
             sinkhole_ttl_secs: 60,
         }
     }
@@ -339,10 +347,8 @@ impl AppConfig {
             ("server.port", u64::from(self.server.port)),
             ("server.upstream_port", u64::from(self.server.upstream_port)),
             ("server.timeout_ms", self.server.timeout_ms),
-            (
-                "server.max_concurrent_queries",
-                self.server.max_concurrent_queries as u64,
-            ),
+            ("server.max_inflight", self.server.max_inflight as u64),
+            ("server.shutdown_grace_ms", self.server.shutdown_grace_ms),
             (
                 "server.sinkhole_ttl_secs",
                 u64::from(self.server.sinkhole_ttl_secs),
@@ -386,6 +392,19 @@ impl AppConfig {
                 "default_policy.blocklists is empty; clients that match no policy are never blocked"
                     .to_owned(),
             );
+        }
+        if !self.server.listen.is_loopback() {
+            if let Some(open) = self
+                .server
+                .allowed_clients
+                .iter()
+                .find(|net| net.prefix_len() == 0)
+            {
+                warnings.push(format!(
+                    "server.listen {} is not loopback while allowed_clients includes {open}: this exposes an open resolver",
+                    self.server.listen
+                ));
+            }
         }
 
         Ok(warnings)
@@ -551,7 +570,8 @@ mod tests {
         assert_eq!(server.upstream, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
         assert_eq!(server.upstream_port, 53);
         assert_eq!(server.timeout_ms, 2000);
-        assert_eq!(server.max_concurrent_queries, 256);
+        assert_eq!(server.max_inflight, 256);
+        assert_eq!(server.shutdown_grace_ms, 2000);
         assert_eq!(server.sinkhole_ttl_secs, 60);
         assert_eq!(server.upstream, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
     }

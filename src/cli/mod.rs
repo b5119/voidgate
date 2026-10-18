@@ -4,12 +4,16 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 
-use crate::blocklists::cache;
+use crate::blocklists::{cache, BlocklistStore};
 use crate::config::AppConfig;
+use crate::server::{Server, ServerError};
+use crate::storage::QueryLog;
 
 /// Parsed command line.
 #[derive(Debug, Parser)]
@@ -86,10 +90,109 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
     }
 
     match cli.command {
-        Command::Run => Err(not_implemented("voidgate run", "M5b: UDP/TCP DNS server")),
+        Command::Run => run_server(&loaded.config),
         Command::UpdateLists => update_lists(&loaded.config),
         Command::Stats => Err(not_implemented("voidgate stats", "M6: stats reporting")),
     }
+}
+
+/// Serves DNS until `ctrl-c`/`SIGTERM`: loads the cached blocklists, starts the
+/// query log, binds the listener, and runs the receive loop.
+///
+/// Cached blocklists are loaded fail-soft (missing/partial cache yields an
+/// empty store plus a warning per list), so the server always starts.
+fn run_server(config: &AppConfig) -> Result<(), CliError> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|source| {
+        CliError::Runtime(anyhow::anyhow!("failed to start async runtime: {source}"))
+    })?;
+    runtime.block_on(serve(config))
+}
+
+/// The async body of [`run_server`].
+async fn serve(config: &AppConfig) -> Result<(), CliError> {
+    let store = BlocklistStore::load_from_cache(&config.blocklists);
+    let counts: Vec<(String, usize)> = config
+        .blocklists
+        .lists
+        .iter()
+        .map(|source| (source.name.clone(), store.domain_count(&source.name)))
+        .collect();
+    for (name, domains) in &counts {
+        tracing::info!(list = %name, domains, "blocklist loaded from cache");
+    }
+    let total: usize = counts.iter().map(|(_, domains)| domains).sum();
+    tracing::info!(lists = counts.len(), domains = total, "blocklists ready");
+
+    let query_log = QueryLog::start(&config.storage).map_err(|error| {
+        CliError::Runtime(anyhow::anyhow!("failed to start the query log: {error}"))
+    })?;
+
+    let blocklists = Arc::new(ArcSwap::from_pointee(store));
+    let server = Server::bind(config, blocklists, query_log)
+        .map_err(|error| CliError::Runtime(anyhow::anyhow!("{}", format_bind_error(&error))))?;
+
+    let addr = server.local_addr().map_err(|source| {
+        CliError::Runtime(anyhow::anyhow!("listener has no address: {source}"))
+    })?;
+    tracing::info!(%addr, "voidgate DNS server listening (ctrl-c to stop)");
+
+    server
+        .run(shutdown_signal())
+        .await
+        .map_err(|error| CliError::Runtime(anyhow::anyhow!("server error: {error}")))?;
+
+    tracing::info!("voidgate shut down cleanly");
+    Ok(())
+}
+
+/// Resolves on `ctrl-c` or, on Unix, `SIGTERM` (sent by `systemd stop`).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::error!(%error, "failed to listen for ctrl-c");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
+}
+
+/// Expands a bind failure with an actionable hint; any other error is shown
+/// as-is.
+fn format_bind_error(error: &ServerError) -> String {
+    let ServerError::Bind { addr, source } = error else {
+        return error.to_string();
+    };
+    let hint = match source.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            "port 53 needs root or CAP_NET_BIND_SERVICE; use a high port (e.g. 5353) for testing"
+        }
+        std::io::ErrorKind::AddrInUse => {
+            "something already owns the address; on many Linux systems systemd-resolved \
+             holds 127.0.0.53:53, so bind a different address or port"
+        }
+        _ => "check server.listen and server.port in config.yaml",
+    };
+    format!("cannot bind UDP listener on {addr}: {source} (hint: {hint})")
 }
 
 /// Refreshes every `url` blocklist into the cache and prints a per-list

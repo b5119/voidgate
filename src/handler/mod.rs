@@ -11,12 +11,12 @@
 //! 5. synthesise sinkhole answers for blocked names — `A` → `0.0.0.0`,
 //!    `AAAA` → `::`, **every other qtype (including HTTPS/SVCB, type 65) →
 //!    NOERROR with an empty answer**; blocked names are never forwarded,
-//! 6. forward allowed/unmatched names upstream under a concurrency permit, and
-//!    log the action (`allowed` | `blocked` | `forwarded` | `servfail`) with
-//!    upstream latency.
+//! 6. forward allowed/unmatched names upstream and log the action (`allowed`
+//!    | `blocked` | `forwarded` | `servfail`) with upstream latency.
 //!
-//! Malformed packets are dropped; upstream failures and permit exhaustion
-//! become SERVFAIL. Neither path may panic.
+//! Malformed packets are dropped; upstream failures become SERVFAIL. Neither
+//! path may panic. Concurrency is bounded by the listener (see
+//! [`crate::server`]), so the handler itself is free of permits and queues.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwap;
 use hickory_proto::op::{Message, MessageType, OpCode, ResponseCode};
 use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
-use tokio::sync::Semaphore;
 
 use crate::blocklists::BlocklistStore;
 use crate::config::{AclAction, AppConfig, ServerConfig};
@@ -44,7 +43,6 @@ pub struct AppState {
     blocklists: Arc<ArcSwap<BlocklistStore>>,
     resolver: Arc<Resolver>,
     query_log: QueryLog,
-    permits: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -64,8 +62,14 @@ impl AppState {
             blocklists,
             resolver: Arc::new(Resolver::new(upstream, timeout)),
             query_log,
-            permits: Arc::new(Semaphore::new(config.server.max_concurrent_queries)),
         }
+    }
+
+    /// The query-log handle, so the listener can flush pending rows on
+    /// shutdown.
+    #[must_use]
+    pub fn query_log(&self) -> &QueryLog {
+        &self.query_log
     }
 }
 
@@ -118,7 +122,7 @@ pub async fn handle_query(state: &AppState, client: SocketAddr, request: &[u8]) 
     }
 }
 
-/// Forwards `query` upstream under a permit, returning the reply or SERVFAIL.
+/// Forwards `query` upstream, returning the reply or SERVFAIL.
 async fn forward(
     state: &AppState,
     client_ip: IpAddr,
@@ -126,12 +130,6 @@ async fn forward(
     action: Action,
     query: &Message,
 ) -> Option<Vec<u8>> {
-    let Ok(_permit) = state.permits.try_acquire() else {
-        tracing::warn!(%client_ip, "in-flight query limit reached; answering SERVFAIL");
-        log_row(state, client_ip, domain, Action::Servfail, None);
-        return error_response(query, ResponseCode::ServFail);
-    };
-
     let started = Instant::now();
     match state.resolver.forward(query).await {
         Ok(reply) => {

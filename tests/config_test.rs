@@ -31,7 +31,8 @@ fn example_config_loads_without_warnings() {
     assert_eq!(config.server.listen, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.server.acl_action, AclAction::Refuse);
     assert_eq!(config.server.sinkhole_ttl_secs, 60);
-    assert_eq!(config.server.max_concurrent_queries, 256);
+    assert_eq!(config.server.max_inflight, 256);
+    assert_eq!(config.server.shutdown_grace_ms, 2000);
     assert_eq!(config.blocklists.refresh_interval_secs, 86_400);
     assert_eq!(config.storage.retention_days, 30);
     assert!(config.storage.log_queries);
@@ -61,7 +62,8 @@ default_policy: {}
     );
     assert_eq!(config.server.upstream_port, 53);
     assert_eq!(config.server.timeout_ms, 2000);
-    assert_eq!(config.server.max_concurrent_queries, 256);
+    assert_eq!(config.server.max_inflight, 256);
+    assert_eq!(config.server.shutdown_grace_ms, 2000);
     assert_eq!(config.server.sinkhole_ttl_secs, 60);
     assert_eq!(config.server.acl_action, AclAction::Refuse);
     assert_eq!(config.blocklists.cache_dir, Path::new("cache"));
@@ -244,8 +246,12 @@ fn zero_valued_tunables_are_rejected() {
         ("server.timeout_ms", "server: { allowed_clients: [\"10.0.0.0/8\"], timeout_ms: 0 }\ndefault_policy: {}\n"),
         ("server.sinkhole_ttl_secs", "server: { allowed_clients: [\"10.0.0.0/8\"], sinkhole_ttl_secs: 0 }\ndefault_policy: {}\n"),
         (
-            "server.max_concurrent_queries",
-            "server: { allowed_clients: [\"10.0.0.0/8\"], max_concurrent_queries: 0 }\ndefault_policy: {}\n",
+            "server.max_inflight",
+            "server: { allowed_clients: [\"10.0.0.0/8\"], max_inflight: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "server.shutdown_grace_ms",
+            "server: { allowed_clients: [\"10.0.0.0/8\"], shutdown_grace_ms: 0 }\ndefault_policy: {}\n",
         ),
         (
             "blocklists.fetch_timeout_secs",
@@ -366,4 +372,43 @@ fn minimal_helper_config_loads() {
     let loaded = load(&common::minimal_config_yaml()).expect("helper config should load");
     assert_eq!(loaded.config.blocklists.lists.len(), 1);
     assert_eq!(loaded.config.blocklists.lists[0].name, "testlist");
+}
+
+#[test]
+fn open_resolver_configuration_warns() {
+    for listen in ["0.0.0.0", "10.0.0.1"] {
+        let yaml = format!(
+            "server: {{ listen: \"{listen}\", allowed_clients: [\"0.0.0.0/0\"] }}\ndefault_policy: {{}}\n"
+        );
+        let loaded = load(&yaml).expect("config should load");
+        assert!(
+            loaded.warnings.iter().any(|w| w.contains("open resolver")),
+            "listen {listen} should warn: {:?}",
+            loaded.warnings
+        );
+    }
+}
+
+#[test]
+fn open_acl_on_loopback_does_not_warn_about_open_resolver() {
+    let yaml =
+        "server: { listen: \"127.0.0.1\", allowed_clients: [\"0.0.0.0/0\", \"::/0\"] }\ndefault_policy: {}\n";
+    let loaded = load(yaml).expect("config should load");
+    assert!(
+        !loaded.warnings.iter().any(|w| w.contains("open resolver")),
+        "loopback listen should not warn: {:?}",
+        loaded.warnings
+    );
+}
+
+#[test]
+fn narrow_acl_on_public_interface_does_not_warn_about_open_resolver() {
+    let yaml =
+        "server: { listen: \"0.0.0.0\", allowed_clients: [\"192.168.1.0/24\"] }\ndefault_policy: {}\n";
+    let loaded = load(yaml).expect("config should load");
+    assert!(
+        !loaded.warnings.iter().any(|w| w.contains("open resolver")),
+        "a narrow ACL should not warn: {:?}",
+        loaded.warnings
+    );
 }

@@ -56,19 +56,25 @@ fn missing_config_file_exits_with_1() {
 }
 
 #[test]
-fn run_with_valid_config_exits_with_2_until_m5b() {
-    let dir = tempfile::tempdir().expect("tempdir should be creatable");
-    let path = write_config(dir.path(), &common::minimal_config_yaml());
-    let path = path.to_str().unwrap();
+fn run_with_port_in_use_exits_with_2_and_a_hint() {
+    // Hold a loopback UDP port so the child's bind fails with EADDRINUSE.
+    let occupied = std::net::UdpSocket::bind("127.0.0.1:0").expect("port should bind");
+    let port = occupied.local_addr().unwrap().port();
 
-    let output = run_voidgate(&["run", "--config", path]);
+    let dir = tempfile::tempdir().expect("tempdir should be creatable");
+    let yaml = format!(
+        "server: {{ listen: \"127.0.0.1\", port: {port}, allowed_clients: [\"127.0.0.0/8\"] }}\nstorage: {{ log_queries: false }}\ndefault_policy: {{}}\n"
+    );
+    let path = write_config(dir.path(), &yaml);
+
+    let output = run_voidgate(&["run", "--config", path.to_str().unwrap()]);
     assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+    assert!(output.stderr.contains("hint"), "{}", output.stderr);
     assert!(
-        output.stderr.contains("not implemented yet"),
+        output.stderr.contains(&format!("127.0.0.1:{port}")),
         "{}",
         output.stderr
     );
-    assert!(output.stderr.contains("M5b"), "{}", output.stderr);
 }
 
 #[test]
