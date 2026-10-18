@@ -72,10 +72,22 @@ default_policy:
 
 storage:
   db_path: "voidgate.db"
-  # false = serve without writing query rows.
+  # false = serve without writing query rows (no database file is created).
   log_queries: true
-  # Rows older than this are pruned at startup and hourly; 0 = keep forever.
+  # Rows older than this are pruned at startup and every prune_interval_secs;
+  # 0 = keep forever.
   retention_days: 30
+  # SQLite busy_timeout for the writer and stats connections (must be > 0).
+  busy_timeout_ms: 5000
+  # Queue between query handlers and the writer thread. When full, rows are
+  # dropped (and counted) instead of blocking DNS (must be > 0).
+  queue_capacity: 8192
+  # Commit a transaction once this many rows are pending (must be > 0).
+  flush_rows: 256
+  # ...or after this long, so low-traffic servers still persist promptly.
+  flush_interval_ms: 500
+  # How often the writer prunes expired rows (must be > 0).
+  prune_interval_secs: 3600
 
 # tracing filter: "info", "debug", or a full env-filter like "voidgate=debug"
 log_level: "info"

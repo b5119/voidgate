@@ -72,6 +72,11 @@ default_policy: {}
     assert_eq!(config.storage.db_path, Path::new("voidgate.db"));
     assert!(config.storage.log_queries);
     assert_eq!(config.storage.retention_days, 30);
+    assert_eq!(config.storage.busy_timeout_ms, 5000);
+    assert_eq!(config.storage.queue_capacity, 8192);
+    assert_eq!(config.storage.flush_rows, 256);
+    assert_eq!(config.storage.flush_interval_ms, 500);
+    assert_eq!(config.storage.prune_interval_secs, 3600);
     assert_eq!(config.log_level, "info");
 
     // Empty default policy and no policies are warnings, not errors.
@@ -249,6 +254,26 @@ fn zero_valued_tunables_are_rejected() {
         (
             "blocklists.max_fetch_bytes",
             "server: { allowed_clients: [\"10.0.0.0/8\"] }\nblocklists: { max_fetch_bytes: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "storage.busy_timeout_ms",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nstorage: { busy_timeout_ms: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "storage.queue_capacity",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nstorage: { queue_capacity: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "storage.flush_rows",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nstorage: { flush_rows: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "storage.flush_interval_ms",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nstorage: { flush_interval_ms: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "storage.prune_interval_secs",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nstorage: { prune_interval_secs: 0 }\ndefault_policy: {}\n",
         ),
     ] {
         let err = load(yaml).expect_err("zero value must fail");

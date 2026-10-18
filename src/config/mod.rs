@@ -241,11 +241,28 @@ pub struct DefaultPolicyConfig {
 pub struct StorageConfig {
     /// SQLite database path.
     pub db_path: PathBuf,
-    /// `false` disables query rows entirely (the server keeps serving).
+    /// `false` disables query rows entirely: no database file is created and
+    /// no writer thread is spawned (log calls become no-ops).
     pub log_queries: bool,
-    /// Rows older than this many days are pruned at startup and hourly.
-    /// `0` disables pruning.
+    /// Rows older than this many days are pruned at startup and then on the
+    /// `prune_interval_secs` schedule. `0` disables pruning.
     pub retention_days: u32,
+    /// SQLite `busy_timeout` for the writer and stats connections, in
+    /// milliseconds. Must be greater than 0.
+    pub busy_timeout_ms: u64,
+    /// Capacity of the in-memory queue between query handlers and the writer
+    /// thread. When full, new rows are dropped (and counted) rather than
+    /// blocking DNS. Must be greater than 0.
+    pub queue_capacity: usize,
+    /// The writer commits a transaction once this many rows are pending. Must
+    /// be greater than 0.
+    pub flush_rows: usize,
+    /// The writer also commits on this interval, in milliseconds, so a
+    /// low-traffic server still persists rows promptly. Must be greater than 0.
+    pub flush_interval_ms: u64,
+    /// How often the writer thread prunes expired rows, in seconds. Must be
+    /// greater than 0 (ignored when `retention_days` is 0).
+    pub prune_interval_secs: u64,
 }
 
 impl Default for StorageConfig {
@@ -254,6 +271,11 @@ impl Default for StorageConfig {
             db_path: PathBuf::from("voidgate.db"),
             log_queries: true,
             retention_days: 30,
+            busy_timeout_ms: 5000,
+            queue_capacity: 8192,
+            flush_rows: 256,
+            flush_interval_ms: 500,
+            prune_interval_secs: 3600,
         }
     }
 }
@@ -333,6 +355,7 @@ impl AppConfig {
 
         self.validate_blocklists()?;
         self.validate_policies()?;
+        self.validate_storage()?;
         self.validate_log_level()?;
 
         if self.policies.is_empty() {
@@ -475,6 +498,25 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Checks the storage tunables that must be strictly positive.
+    fn validate_storage(&self) -> Result<(), ConfigError> {
+        for (field, value) in [
+            ("storage.busy_timeout_ms", self.storage.busy_timeout_ms),
+            ("storage.queue_capacity", self.storage.queue_capacity as u64),
+            ("storage.flush_rows", self.storage.flush_rows as u64),
+            ("storage.flush_interval_ms", self.storage.flush_interval_ms),
+            (
+                "storage.prune_interval_secs",
+                self.storage.prune_interval_secs,
+            ),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::NonZero { field });
+            }
+        }
+        Ok(())
+    }
+
     /// Validates `log_level` as a `tracing`/`env-filter` directive.
     fn validate_log_level(&self) -> Result<(), ConfigError> {
         if self.log_level.trim().is_empty() {
@@ -520,6 +562,11 @@ mod tests {
         assert_eq!(storage.db_path, PathBuf::from("voidgate.db"));
         assert!(storage.log_queries);
         assert_eq!(storage.retention_days, 30);
+        assert_eq!(storage.busy_timeout_ms, 5000);
+        assert_eq!(storage.queue_capacity, 8192);
+        assert_eq!(storage.flush_rows, 256);
+        assert_eq!(storage.flush_interval_ms, 500);
+        assert_eq!(storage.prune_interval_secs, 3600);
     }
 
     #[test]
