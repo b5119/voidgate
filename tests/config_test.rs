@@ -66,6 +66,9 @@ default_policy: {}
     assert_eq!(config.server.acl_action, AclAction::Refuse);
     assert_eq!(config.blocklists.cache_dir, Path::new("cache"));
     assert_eq!(config.blocklists.refresh_interval_secs, 86_400);
+    assert_eq!(config.blocklists.fetch_timeout_secs, 30);
+    assert_eq!(config.blocklists.max_fetch_bytes, 52_428_800);
+    assert_eq!(config.blocklists.min_retained_percent, 10);
     assert_eq!(config.storage.db_path, Path::new("voidgate.db"));
     assert!(config.storage.log_queries);
     assert_eq!(config.storage.retention_days, 30);
@@ -239,12 +242,72 @@ fn zero_valued_tunables_are_rejected() {
             "server.max_concurrent_queries",
             "server: { allowed_clients: [\"10.0.0.0/8\"], max_concurrent_queries: 0 }\ndefault_policy: {}\n",
         ),
+        (
+            "blocklists.fetch_timeout_secs",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nblocklists: { fetch_timeout_secs: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "blocklists.max_fetch_bytes",
+            "server: { allowed_clients: [\"10.0.0.0/8\"] }\nblocklists: { max_fetch_bytes: 0 }\ndefault_policy: {}\n",
+        ),
     ] {
         let err = load(yaml).expect_err("zero value must fail");
         match &err {
             ConfigError::NonZero { field: got } => assert_eq!(*got, field),
             other => panic!("expected NonZero({field}), got {other:?}"),
         }
+    }
+}
+
+#[test]
+fn min_retained_percent_must_be_1_to_100() {
+    for value in [0u32, 101, 999] {
+        let yaml = format!(
+            "server: {{ allowed_clients: [\"10.0.0.0/8\"] }}\nblocklists: {{ min_retained_percent: {value} }}\ndefault_policy: {{}}\n"
+        );
+        let err = load(&yaml).expect_err("out-of-range value must fail");
+        match &err {
+            ConfigError::OutOfRange {
+                field,
+                value: got,
+                min,
+                max,
+            } => {
+                assert_eq!(*field, "blocklists.min_retained_percent");
+                assert_eq!(*got, value);
+                assert_eq!((*min, *max), (1, 100));
+            }
+            other => panic!("expected OutOfRange, got {other:?}"),
+        }
+    }
+    // In-range boundary values are accepted.
+    for value in [1u32, 10, 100] {
+        let yaml = format!(
+            "server: {{ allowed_clients: [\"10.0.0.0/8\"] }}\nblocklists: {{ min_retained_percent: {value} }}\ndefault_policy: {{}}\n"
+        );
+        load(&yaml).unwrap_or_else(|err| panic!("{value} should be accepted: {err}"));
+    }
+}
+
+#[test]
+fn blocklist_names_must_be_cache_safe() {
+    // Safe names load fine.
+    for name in ["stevenblack", "local-ads", "a_b_c9", "x"] {
+        let yaml = format!(
+            "server: {{ allowed_clients: [\"10.0.0.0/8\"] }}\nblocklists: {{ lists: [{{ name: \"{name}\", type: file, source: \"x.txt\" }}] }}\ndefault_policy: {{}}\n"
+        );
+        load(&yaml).unwrap_or_else(|err| panic!("{name} should be accepted: {err}"));
+    }
+    // Names that could traverse a path or confuse a filesystem are rejected.
+    for name in ["../evil", "a/b", "UPPER", "with space", "dot.name", "nämé"] {
+        let yaml = format!(
+            "server: {{ allowed_clients: [\"10.0.0.0/8\"] }}\nblocklists: {{ lists: [{{ name: \"{name}\", type: file, source: \"x.txt\" }}] }}\ndefault_policy: {{}}\n"
+        );
+        let err = load(&yaml).expect_err("unsafe name must fail");
+        assert!(
+            matches!(err, ConfigError::InvalidBlocklistName { .. }),
+            "expected InvalidBlocklistName for {name:?}, got {err:?}"
+        );
     }
 }
 

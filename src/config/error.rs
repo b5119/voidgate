@@ -84,4 +84,25 @@ pub enum ConfigError {
         /// Parser message explaining the rejection.
         message: String,
     },
+
+    /// A blocklist name would be unsafe as a cache filename (path traversal
+    /// or case-sensitivity hazards).
+    #[error("invalid blocklist name `{name}`: only a-z, 0-9, _ and - are allowed")]
+    InvalidBlocklistName {
+        /// The rejected name.
+        name: String,
+    },
+
+    /// A numeric setting lies outside its permitted range.
+    #[error("`{field}` = {value} is outside the allowed range {min}..={max}")]
+    OutOfRange {
+        /// Dotted path of the offending field.
+        field: &'static str,
+        /// The rejected value.
+        value: u32,
+        /// Inclusive lower bound.
+        min: u32,
+        /// Inclusive upper bound.
+        max: u32,
+    },
 }

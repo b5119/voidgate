@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 
+use crate::blocklists::cache;
 use crate::config::AppConfig;
 
 /// Parsed command line.
@@ -45,6 +46,10 @@ enum CliError {
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
 
+    /// A fatal blocklist/cache failure → exit code 2.
+    #[error(transparent)]
+    Blocklist(#[from] crate::blocklists::BlocklistError),
+
     /// Anything that went wrong at runtime → exit code 2.
     #[error(transparent)]
     Runtime(#[from] anyhow::Error),
@@ -60,6 +65,10 @@ pub fn run() -> ExitCode {
         Err(CliError::Config(err)) => {
             eprintln!("config error: {err}");
             ExitCode::from(1)
+        }
+        Err(CliError::Blocklist(err)) => {
+            eprintln!("blocklist error: {err}");
+            ExitCode::from(2)
         }
         Err(CliError::Runtime(err)) => {
             eprintln!("error: {err}");
@@ -78,12 +87,30 @@ fn execute(cli: &Cli) -> Result<(), CliError> {
 
     match cli.command {
         Command::Run => Err(not_implemented("voidgate run", "M5b: UDP/TCP DNS server")),
-        Command::UpdateLists => Err(not_implemented(
-            "voidgate update-lists",
-            "M2: blocklist fetching",
-        )),
+        Command::UpdateLists => update_lists(&loaded.config),
         Command::Stats => Err(not_implemented("voidgate stats", "M6: stats reporting")),
     }
+}
+
+/// Refreshes every `url` blocklist into the cache and prints a per-list
+/// report (updated / kept previous cache / local file).
+///
+/// Exit code stays `0` even when individual lists are rejected — the report
+/// explains each outcome; only fatal errors (e.g. an unusable cache
+/// directory) yield exit code 2.
+fn update_lists(config: &AppConfig) -> Result<(), CliError> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|source| {
+        CliError::Runtime(anyhow::anyhow!("failed to start async runtime: {source}"))
+    })?;
+    let reports = runtime.block_on(cache::refresh_all(&config.blocklists))?;
+    if reports.is_empty() {
+        println!("no blocklists configured");
+        return Ok(());
+    }
+    for report in &reports {
+        println!("{report}");
+    }
+    Ok(())
 }
 
 /// Builds the placeholder error used until a subcommand is implemented.

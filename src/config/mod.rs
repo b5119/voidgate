@@ -148,8 +148,17 @@ pub struct BlocklistsConfig {
     /// `0` disables the periodic refresh; `SIGHUP` still reloads whatever is
     /// in the cache (offline).
     pub refresh_interval_secs: u64,
-    /// The lists themselves; names must be unique and are referenced by
-    /// policies.
+    /// HTTP timeout for `update-lists` fetches. Must be greater than 0.
+    pub fetch_timeout_secs: u64,
+    /// Downloads larger than this (bytes) are rejected and the previous cache
+    /// file is kept. Must be greater than 0. Default: 50 MiB.
+    pub max_fetch_bytes: u64,
+    /// A refresh is rejected (previous cache kept) when the new domain count
+    /// retains less than this percentage of the previous count — i.e. `10`
+    /// rejects downloads that are more than 90% smaller. Allowed 1..=100.
+    pub min_retained_percent: u32,
+    /// The lists themselves; names must be unique, match `[a-z0-9_-]+`, and
+    /// are referenced by policies.
     pub lists: Vec<BlocklistSource>,
 }
 
@@ -158,6 +167,9 @@ impl Default for BlocklistsConfig {
         Self {
             cache_dir: PathBuf::from("cache"),
             refresh_interval_secs: 86_400,
+            fetch_timeout_secs: 30,
+            max_fetch_bytes: 52_428_800,
+            min_retained_percent: 10,
             lists: Vec::new(),
         }
     }
@@ -248,6 +260,19 @@ impl Default for StorageConfig {
 
 fn default_log_level() -> String {
     "info".to_owned()
+}
+
+/// Returns `true` when `name` is safe to embed in a cache filename:
+/// non-empty and only `a-z`, `0-9`, `_`, `-`.
+///
+/// Enforced at config-validation time *and* when cache paths are built
+/// (defence in depth against path traversal).
+#[must_use]
+pub fn is_cache_safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
 impl AppConfig {
@@ -343,15 +368,42 @@ impl AppConfig {
         Ok(warnings)
     }
 
-    /// Checks `blocklists.lists`: non-blank names/sources, unique names, and
-    /// that every policy (and the default policy) only references lists that
-    /// exist.
+    /// Checks `blocklists.lists`: non-blank names/sources, cache-safe name
+    /// pattern, unique names, fetch tunables, and that every policy (and the
+    /// default policy) only references lists that exist.
     fn validate_blocklists(&self) -> Result<(), ConfigError> {
+        if self.blocklists.fetch_timeout_secs == 0 {
+            return Err(ConfigError::NonZero {
+                field: "blocklists.fetch_timeout_secs",
+            });
+        }
+        if self.blocklists.max_fetch_bytes == 0 {
+            return Err(ConfigError::NonZero {
+                field: "blocklists.max_fetch_bytes",
+            });
+        }
+        if !(1..=100).contains(&self.blocklists.min_retained_percent) {
+            return Err(ConfigError::OutOfRange {
+                field: "blocklists.min_retained_percent",
+                value: self.blocklists.min_retained_percent,
+                min: 1,
+                max: 100,
+            });
+        }
+
         let mut names: HashSet<&str> = HashSet::new();
         for (index, list) in self.blocklists.lists.iter().enumerate() {
             if list.name.trim().is_empty() {
                 return Err(ConfigError::EmptyField {
                     field: format!("blocklists.lists[{index}].name"),
+                });
+            }
+            // Cache filenames are derived from the name, so restrict it to a
+            // traversal-safe, case-stable pattern. (Same rule is enforced
+            // again when the cache path is built.)
+            if !is_cache_safe_name(&list.name) {
+                return Err(ConfigError::InvalidBlocklistName {
+                    name: list.name.clone(),
                 });
             }
             if list.source.trim().is_empty() {

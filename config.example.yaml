@@ -29,6 +29,14 @@ blocklists:
   # How often the running server re-fetches URL lists and hot-swaps them.
   # 0 disables the timer (SIGHUP still reloads the local cache).
   refresh_interval_secs: 86400
+  # HTTP timeout for update-lists fetches (must be > 0).
+  fetch_timeout_secs: 30
+  # Downloads larger than this (bytes) are rejected; old cache kept.
+  max_fetch_bytes: 52428800
+  # Reject a refresh retaining less than this % of the previous domain count
+  # (10 = "more than 90% smaller keeps the old file"). Allowed 1..=100.
+  min_retained_percent: 10
+  # Names must match [a-z0-9_-]+ (they become cache filenames).
   lists:
     - name: stevenblack
       type: url
