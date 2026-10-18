@@ -1769,6 +1769,7 @@ dependencies = [
  "clap",
  "hickory-proto",
  "ipnet",
+ "rand",
  "reqwest",
  "rusqlite",
  "serde",

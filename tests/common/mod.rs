@@ -3,12 +3,14 @@
 //! Shared fixtures for voidgate integration tests.
 
 use std::fs;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::rr::{Name, RData, Record, RecordType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UdpSocket};
 
 /// Writes `yaml` to `dir/config.yaml` and returns the path.
 ///
@@ -92,4 +94,151 @@ pub async fn spawn_http_server(behavior: HttpBehavior, body: Vec<u8>) -> SocketA
         }
     });
     addr
+}
+
+/// How a fake UDP upstream answers (or fails to answer) each query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamBehavior {
+    /// Well-formed reply echoing the question with an `A 1.2.3.4` answer.
+    Valid,
+    /// Receive the query and never reply: forces a resolver timeout.
+    Silent,
+    /// Reply with bytes that are not a DNS message.
+    Garbage,
+    /// Reply with a valid message but a mismatched transaction ID.
+    WrongId,
+    /// Reply with a valid message but a different question section.
+    WrongQuestion,
+    /// Reply with `SERVFAIL`.
+    ServFail,
+    /// Reply with a valid message whose `TC` bit is set.
+    Truncated,
+    /// Send a wrong-ID reply, then the correct one.
+    BadThenGood,
+    /// Send a good reply from a *different* socket (wrong source), then the
+    /// correct one from the real upstream.
+    WrongSourceThenGood,
+}
+
+/// Starts a one-shot-per-query fake UDP upstream on an ephemeral loopback port.
+///
+/// Never touches the real network: everything stays on `127.0.0.1`.
+pub async fn spawn_udp_upstream(behavior: UpstreamBehavior) -> SocketAddr {
+    let socket = UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("fake upstream should bind");
+    let addr = socket
+        .local_addr()
+        .expect("bound upstream should have an address");
+    tokio::spawn(async move {
+        let mut buffer = vec![0u8; 65_537];
+        loop {
+            let Ok((len, from)) = socket.recv_from(&mut buffer).await else {
+                return;
+            };
+            let request = &buffer[..len];
+            match behavior {
+                UpstreamBehavior::Silent => {}
+                UpstreamBehavior::Garbage => {
+                    let _ = socket.send_to(b"this is not a dns message", from).await;
+                }
+                UpstreamBehavior::BadThenGood => {
+                    let query = Message::from_vec(request).expect("valid query");
+                    let mut bad = valid_reply(&query);
+                    bad.metadata.id = query.metadata.id.wrapping_add(1);
+                    let _ = socket
+                        .send_to(&bad.to_vec().expect("serialize"), from)
+                        .await;
+                    let _ = socket
+                        .send_to(&valid_reply(&query).to_vec().expect("serialize"), from)
+                        .await;
+                }
+                UpstreamBehavior::WrongSourceThenGood => {
+                    let query = Message::from_vec(request).expect("valid query");
+                    let stray = UdpSocket::bind("127.0.0.1:0")
+                        .await
+                        .expect("stray socket should bind");
+                    let _ = stray
+                        .send_to(&valid_reply(&query).to_vec().expect("serialize"), from)
+                        .await;
+                    let _ = socket
+                        .send_to(&valid_reply(&query).to_vec().expect("serialize"), from)
+                        .await;
+                }
+                other => {
+                    let query = Message::from_vec(request).expect("valid query");
+                    if let Some(bytes) = reply_for(&query, other) {
+                        let _ = socket.send_to(&bytes, from).await;
+                    }
+                }
+            }
+        }
+    });
+    addr
+}
+
+/// Serialises the reply `behavior` sends for `query`, if it sends one.
+fn reply_for(query: &Message, behavior: UpstreamBehavior) -> Option<Vec<u8>> {
+    let reply = match behavior {
+        UpstreamBehavior::Valid => valid_reply(query),
+        UpstreamBehavior::WrongId => {
+            let mut reply = valid_reply(query);
+            reply.metadata.id = query.metadata.id.wrapping_add(1);
+            reply
+        }
+        UpstreamBehavior::WrongQuestion => {
+            let mut reply = valid_reply(query);
+            let name = Name::from_ascii("wrong.example.").expect("name should parse");
+            reply.queries = vec![Query::query(name, RecordType::A)];
+            reply
+        }
+        UpstreamBehavior::ServFail => {
+            let mut reply =
+                Message::error_msg(query.metadata.id, OpCode::Query, ResponseCode::ServFail);
+            reply.queries = query.queries.clone();
+            reply
+        }
+        UpstreamBehavior::Truncated => {
+            let mut reply = valid_reply(query);
+            reply.metadata.truncation = true;
+            reply.answers.clear();
+            reply
+        }
+        UpstreamBehavior::Silent
+        | UpstreamBehavior::Garbage
+        | UpstreamBehavior::BadThenGood
+        | UpstreamBehavior::WrongSourceThenGood => return None,
+    };
+    Some(reply.to_vec().expect("reply should serialize"))
+}
+
+/// A `NOERROR` reply echoing the question; `A` queries get `1.2.3.4`.
+fn valid_reply(query: &Message) -> Message {
+    let mut reply = Message::response(query.metadata.id, OpCode::Query);
+    reply.queries = query.queries.clone();
+    reply.metadata.recursion_available = true;
+    if let Some(question) = query.queries.first() {
+        if question.query_type() == RecordType::A {
+            reply.add_answer(Record::from_rdata(
+                question.name().clone(),
+                30,
+                RData::A(Ipv4Addr::new(1, 2, 3, 4).into()),
+            ));
+        }
+    }
+    reply
+}
+
+/// Builds a standard recursive query packet (RD set) for tests.
+pub fn build_query(id: u16, name: &str, query_type: RecordType) -> Vec<u8> {
+    let name = Name::from_ascii(name).expect("test name should parse");
+    let mut message = Message::new(id, MessageType::Query, OpCode::Query);
+    message.metadata.recursion_desired = true;
+    message.add_query(Query::query(name, query_type));
+    message.to_vec().expect("query should serialize")
+}
+
+/// Decodes a response packet produced by the handler.
+pub fn parse_response(bytes: &[u8]) -> Message {
+    Message::from_vec(bytes).expect("response should decode")
 }
