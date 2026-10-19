@@ -270,8 +270,10 @@ default_policy:
 
 ## Pointing a device at voidgate
 
-The following steps work for a single device (the easiest way to try it).
-Router-wide setup is in the next section; treat those steps as **generic
+The following steps describe pointing a single device (the easiest way to try
+it). Unlike the loopback quick start, this path is **generic guidance**: it is
+not exercised by the test suite and the exact steps vary by operating system
+and device. Router-wide setup is in the next section, also **generic
 guidance** because router firmware differs.
 
 1. **Bind a reachable address.** On the machine running voidgate, set
