@@ -134,7 +134,11 @@ async fn serve(config: &AppConfig) -> Result<(), CliError> {
     let addr = server.local_addr().map_err(|source| {
         CliError::Runtime(anyhow::anyhow!("listener has no address: {source}"))
     })?;
-    tracing::info!(%addr, "voidgate DNS server listening (ctrl-c to stop)");
+    tracing::info!(
+        %addr,
+        tcp = config.server.tcp_enabled,
+        "voidgate DNS server listening (ctrl-c to stop)"
+    );
 
     server
         .run(shutdown_signal())

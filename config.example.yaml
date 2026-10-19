@@ -20,9 +20,21 @@ server:
   timeout_ms: 2000
   # Cap on queries handled concurrently (listener semaphore). A packet that
   # arrives while every permit is taken is dropped, not queued.
-  max_inflight: 256
+  max_inflight: 1024
+  # Cap on queries forwarded to the upstream resolver at the same time.
+  # When full, forward/allowed queries get SERVFAIL immediately; blocked/denied
+  # and ACL paths never consume an upstream permit.
+  max_upstream_inflight: 256
   # How long to wait for in-flight queries after a shutdown signal (ms).
   shutdown_grace_ms: 2000
+  # TCP listener on the same port as UDP (RFC 1035 2-byte length framing).
+  tcp_enabled: true
+  # Idle/partial-frame timeout per TCP connection (ms); 0 is rejected.
+  tcp_idle_timeout_ms: 2000
+  # Simultaneous TCP connections; extras are closed immediately.
+  tcp_max_connections: 128
+  # Queries served on one TCP connection before it is closed.
+  tcp_max_queries_per_conn: 100
   # TTL attached to sinkhole answers (0.0.0.0 / ::).
   sinkhole_ttl_secs: 60
 

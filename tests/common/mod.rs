@@ -111,7 +111,9 @@ pub enum UpstreamBehavior {
     WrongQuestion,
     /// Reply with `SERVFAIL`.
     ServFail,
-    /// Reply with a valid message whose `TC` bit is set.
+    /// Reply with a valid message whose `TC` bit is set. A TCP client that
+    /// retried would still receive only this truncated UDP answer from a
+    /// UDP-only fake upstream (no TCP listener is started).
     Truncated,
     /// Send a wrong-ID reply, then the correct one.
     BadThenGood,
@@ -241,4 +243,73 @@ pub fn build_query(id: u16, name: &str, query_type: RecordType) -> Vec<u8> {
 /// Decodes a response packet produced by the handler.
 pub fn parse_response(bytes: &[u8]) -> Message {
     Message::from_vec(bytes).expect("response should decode")
+}
+
+/// Starts a fake upstream serving both UDP and TCP on **one** port.
+///
+/// The resolver uses a single `upstream:upstream_port` for both transports, so
+/// a `TC`-then-TCP-retry test needs one listener reachable over both. UDP
+/// replies are truncated (TC set, no answer); TCP replies are full `A 1.2.3.4`
+/// answers. Never touches the real network: `127.0.0.1` only.
+pub async fn spawn_truncating_dual_upstream() -> SocketAddr {
+    let udp = UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("udp upstream should bind");
+    let addr = udp
+        .local_addr()
+        .expect("udp upstream should have an address");
+
+    let tcp = TcpListener::bind(addr)
+        .await
+        .expect("tcp upstream should bind the same port");
+
+    tokio::spawn(async move {
+        let mut buffer = vec![0u8; 65_537];
+        loop {
+            let Ok((len, from)) = udp.recv_from(&mut buffer).await else {
+                return;
+            };
+            let Ok(query) = Message::from_vec(&buffer[..len]) else {
+                continue;
+            };
+            let mut truncated = Message::response(query.metadata.id, OpCode::Query);
+            truncated.queries = query.queries.clone();
+            truncated.metadata.truncation = true;
+            let bytes = truncated
+                .to_vec()
+                .expect("truncated reply should serialize");
+            let _ = udp.send_to(&bytes, from).await;
+        }
+    });
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = tcp.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut len_buf = [0u8; 2];
+                while stream.read_exact(&mut len_buf).await.is_ok() {
+                    let len = usize::from(u16::from_be_bytes(len_buf));
+                    let mut message = vec![0u8; len];
+                    if stream.read_exact(&mut message).await.is_err() {
+                        return;
+                    }
+                    let Ok(query) = Message::from_vec(&message) else {
+                        return;
+                    };
+                    let reply = valid_reply(&query);
+                    let bytes = reply.to_vec().expect("reply should serialize");
+                    let mut framed = Vec::with_capacity(2 + bytes.len());
+                    framed.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+                    framed.extend_from_slice(&bytes);
+                    if stream.write_all(&framed).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+
+    addr
 }

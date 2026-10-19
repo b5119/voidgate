@@ -89,6 +89,49 @@ impl BlocklistStore {
     }
 }
 
+/// Reloads every configured list from cache/source for a hot-swap.
+///
+/// Unlike [`BlocklistStore::load_from_cache`] (used at startup, where a bad
+/// list only warns), this fails hard if `config.cache_dir` is not a readable
+/// directory — the signal that the cache is unusable and the running server
+/// should keep its current store rather than swap in an empty one. Individual
+/// list read failures remain fail-soft (warning + empty set), as at startup.
+///
+/// # Errors
+///
+/// Returns [`BlocklistError::Io`] when `cache_dir` cannot be stat'ed or is not
+/// a directory.
+pub fn reload_from_cache(
+    config: &BlocklistsConfig,
+) -> Result<BlocklistStore, crate::blocklists::BlocklistError> {
+    let meta = std::fs::metadata(&config.cache_dir).map_err(|source| {
+        crate::blocklists::BlocklistError::Io {
+            operation: "read cache directory",
+            path: config.cache_dir.clone(),
+            source,
+        }
+    })?;
+    if !meta.is_dir() {
+        return Err(crate::blocklists::BlocklistError::Io {
+            operation: "cache path is not a directory",
+            path: config.cache_dir.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "cache_dir is not a directory",
+            ),
+        });
+    }
+    let mut store = BlocklistStore::new();
+    for source in &config.lists {
+        let domains = match source.kind {
+            BlocklistKind::Url => load_url_from_cache(config, source),
+            BlocklistKind::File => load_file_from_source(source),
+        };
+        store.insert(source.name.clone(), domains);
+    }
+    Ok(store)
+}
+
 /// Reads a URL list from the cache; warns and yields an empty set if absent
 /// or unreadable.
 fn load_url_from_cache(

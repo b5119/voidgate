@@ -66,3 +66,27 @@ Client resolution (`PolicyEngine::resolve`) then domain decision
     undeclared list is rejected by config validation
     (`ConfigError::UnknownBlocklist`), so the engine can never consult a
     missing list.
+
+## Listeners (M5c)
+
+UDP and TCP share one port. Behaviour that is easy to get wrong:
+
+- **TCP connection ACL is enforced at accept**, not per query: a client
+  outside `server.allowed_clients` has its connection closed immediately,
+  with no read and no reply, for *both* `acl_action` values (`drop` and
+  `refuse`). The UDP `refuse` reply has no TCP analogue; TCP clients get a
+  plain close.
+- **TCP framing is RFC 1035**: a 2-byte big-endian length prefix, then the
+  message. A connection may carry up to `tcp_max_queries_per_conn` sequential
+  queries; `tcp_idle_timeout_ms` bounds every read (initial and mid-frame), and
+  a zero-length frame closes the connection.
+- **The two concurrency caps are distinct**: `max_inflight` bounds listener
+  work (UDP packets accepted / TCP connections open), while
+  `max_upstream_inflight` bounds resolver calls. A sinkholed or ACL-refused
+  query never consumes an upstream permit; when upstream permits are
+  exhausted a forward gets an immediate SERVFAIL.
+- **`TC`-over-TCP fallback is client-driven**: a truncated UDP answer is
+  returned as-is to a UDP client, but a TCP client's truncated answer is
+  retried upstream over TCP within the same overall deadline, yielding the
+  full reply.
+

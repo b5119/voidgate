@@ -20,4 +20,4 @@ pub mod parser;
 pub mod store;
 
 pub use error::BlocklistError;
-pub use store::{BlocklistStore, ListSet};
+pub use store::{reload_from_cache, BlocklistStore, ListSet};

@@ -76,15 +76,32 @@ pub struct ServerConfig {
     pub upstream_port: u16,
     /// Per-query upstream timeout in milliseconds.
     pub timeout_ms: u64,
-    /// Maximum number of queries processed concurrently (the listener's
+    /// Maximum number of queries accepted concurrently (the listener's
     /// in-flight semaphore). Packets that arrive when every permit is taken
     /// are dropped rather than spawning unbounded tasks. Must be greater
     /// than 0.
     pub max_inflight: usize,
+    /// Maximum number of queries forwarded to the upstream resolver at the
+    /// same time. When this cap is reached, new forward/allowed queries
+    /// receive SERVFAIL immediately; blocked/denied and ACL paths do not
+    /// consume an upstream permit. Must be greater than 0.
+    pub max_upstream_inflight: usize,
     /// How long, in milliseconds, to wait for in-flight queries to finish
     /// after a shutdown signal before abandoning them. Must be greater
     /// than 0.
     pub shutdown_grace_ms: u64,
+    /// Whether the TCP listener is started alongside UDP on the same port.
+    pub tcp_enabled: bool,
+    /// Idle timeout in milliseconds for a TCP connection: a client that sends
+    /// nothing (or a partial frame) for this long is disconnected. Must be
+    /// greater than 0.
+    pub tcp_idle_timeout_ms: u64,
+    /// Maximum number of simultaneous TCP connections; new connections beyond
+    /// the cap are closed immediately. Must be greater than 0.
+    pub tcp_max_connections: usize,
+    /// Maximum number of queries served on one TCP connection before it is
+    /// closed. Must be greater than 0.
+    pub tcp_max_queries_per_conn: u32,
     /// TTL in seconds attached to sinkhole answers (`0.0.0.0` / `::`).
     pub sinkhole_ttl_secs: u32,
 }
@@ -101,8 +118,13 @@ impl Default for ServerConfig {
             upstream: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
             upstream_port: 53,
             timeout_ms: 2000,
-            max_inflight: 256,
+            max_inflight: 1024,
+            max_upstream_inflight: 256,
             shutdown_grace_ms: 2000,
+            tcp_enabled: true,
+            tcp_idle_timeout_ms: 2000,
+            tcp_max_connections: 128,
+            tcp_max_queries_per_conn: 100,
             sinkhole_ttl_secs: 60,
         }
     }
@@ -348,7 +370,23 @@ impl AppConfig {
             ("server.upstream_port", u64::from(self.server.upstream_port)),
             ("server.timeout_ms", self.server.timeout_ms),
             ("server.max_inflight", self.server.max_inflight as u64),
+            (
+                "server.max_upstream_inflight",
+                self.server.max_upstream_inflight as u64,
+            ),
             ("server.shutdown_grace_ms", self.server.shutdown_grace_ms),
+            (
+                "server.tcp_idle_timeout_ms",
+                self.server.tcp_idle_timeout_ms,
+            ),
+            (
+                "server.tcp_max_connections",
+                self.server.tcp_max_connections as u64,
+            ),
+            (
+                "server.tcp_max_queries_per_conn",
+                u64::from(self.server.tcp_max_queries_per_conn),
+            ),
             (
                 "server.sinkhole_ttl_secs",
                 u64::from(self.server.sinkhole_ttl_secs),
@@ -570,7 +608,8 @@ mod tests {
         assert_eq!(server.upstream, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
         assert_eq!(server.upstream_port, 53);
         assert_eq!(server.timeout_ms, 2000);
-        assert_eq!(server.max_inflight, 256);
+        assert_eq!(server.max_inflight, 1024);
+        assert_eq!(server.max_upstream_inflight, 256);
         assert_eq!(server.shutdown_grace_ms, 2000);
         assert_eq!(server.sinkhole_ttl_secs, 60);
         assert_eq!(server.upstream, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));

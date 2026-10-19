@@ -29,7 +29,7 @@ use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
 use crate::blocklists::BlocklistStore;
 use crate::config::{AclAction, AppConfig, ServerConfig};
 use crate::policy::{decide, Decision, PolicyEngine};
-use crate::resolver::Resolver;
+use crate::resolver::{Resolver, Transport};
 use crate::storage::{now_ms, Action, QueryLog, QueryRow};
 
 /// Shared, cheaply cloneable state for the query pipeline.
@@ -43,6 +43,7 @@ pub struct AppState {
     blocklists: Arc<ArcSwap<BlocklistStore>>,
     resolver: Arc<Resolver>,
     query_log: QueryLog,
+    upstream_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -62,6 +63,9 @@ impl AppState {
             blocklists,
             resolver: Arc::new(Resolver::new(upstream, timeout)),
             query_log,
+            upstream_permits: Arc::new(tokio::sync::Semaphore::new(
+                config.server.max_upstream_inflight,
+            )),
         }
     }
 
@@ -71,14 +75,32 @@ impl AppState {
     pub fn query_log(&self) -> &QueryLog {
         &self.query_log
     }
+
+    /// Whether `ip` is allowed to query, per `server.allowed_clients`.
+    #[must_use]
+    pub fn client_allowed(&self, ip: &IpAddr) -> bool {
+        self.server.client_allowed(ip)
+    }
 }
 
-/// Handles one received DNS message.
+/// Handles one received DNS message over UDP.
+///
+/// Equivalent to [`handle_query_with_transport`] with [`Transport::Udp`].
+pub async fn handle_query(state: &AppState, client: SocketAddr, request: &[u8]) -> Option<Vec<u8>> {
+    handle_query_with_transport(state, client, request, Transport::Udp).await
+}
+
+/// Handles one received DNS message on the given client transport.
 ///
 /// Returns the bytes to send back, or `None` to stay silent (dropped ACL
 /// client, malformed packet, or a non-query message). Never panics: any
 /// unexpected input becomes a silent drop or an error response.
-pub async fn handle_query(state: &AppState, client: SocketAddr, request: &[u8]) -> Option<Vec<u8>> {
+pub async fn handle_query_with_transport(
+    state: &AppState,
+    client: SocketAddr,
+    request: &[u8],
+    transport: Transport,
+) -> Option<Vec<u8>> {
     if !state.server.client_allowed(&client.ip()) {
         return match state.server.acl_action {
             AclAction::Drop => None,
@@ -117,8 +139,28 @@ pub async fn handle_query(state: &AppState, client: SocketAddr, request: &[u8]) 
             log_row(state, client_ip, &domain, Action::Blocked, None);
             to_bytes(reply)
         }
-        Decision::Allowed => forward(state, client_ip, &domain, Action::Allowed, &query).await,
-        Decision::Forward => forward(state, client_ip, &domain, Action::Forwarded, &query).await,
+        Decision::Allowed => {
+            forward(
+                state,
+                client_ip,
+                &domain,
+                Action::Allowed,
+                &query,
+                transport,
+            )
+            .await
+        }
+        Decision::Forward => {
+            forward(
+                state,
+                client_ip,
+                &domain,
+                Action::Forwarded,
+                &query,
+                transport,
+            )
+            .await
+        }
     }
 }
 
@@ -129,9 +171,19 @@ async fn forward(
     domain: &str,
     action: Action,
     query: &Message,
+    transport: Transport,
 ) -> Option<Vec<u8>> {
+    let permit = match state.upstream_permits.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => {
+            tracing::warn!(%client_ip, domain, "upstream in-flight limit reached; answering SERVFAIL");
+            log_row(state, client_ip, domain, Action::Servfail, None);
+            return error_response(query, ResponseCode::ServFail);
+        }
+    };
+    let _permit = permit;
     let started = Instant::now();
-    match state.resolver.forward(query).await {
+    match state.resolver.forward(query, transport).await {
         Ok(reply) => {
             log_row(state, client_ip, domain, action, Some(elapsed_ms(started)));
             to_bytes(reply)

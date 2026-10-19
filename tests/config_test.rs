@@ -31,8 +31,13 @@ fn example_config_loads_without_warnings() {
     assert_eq!(config.server.listen, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.server.acl_action, AclAction::Refuse);
     assert_eq!(config.server.sinkhole_ttl_secs, 60);
-    assert_eq!(config.server.max_inflight, 256);
+    assert_eq!(config.server.max_inflight, 1024);
+    assert_eq!(config.server.max_upstream_inflight, 256);
     assert_eq!(config.server.shutdown_grace_ms, 2000);
+    assert!(config.server.tcp_enabled);
+    assert_eq!(config.server.tcp_idle_timeout_ms, 2000);
+    assert_eq!(config.server.tcp_max_connections, 128);
+    assert_eq!(config.server.tcp_max_queries_per_conn, 100);
     assert_eq!(config.blocklists.refresh_interval_secs, 86_400);
     assert_eq!(config.storage.retention_days, 30);
     assert!(config.storage.log_queries);
@@ -62,8 +67,13 @@ default_policy: {}
     );
     assert_eq!(config.server.upstream_port, 53);
     assert_eq!(config.server.timeout_ms, 2000);
-    assert_eq!(config.server.max_inflight, 256);
+    assert_eq!(config.server.max_inflight, 1024);
+    assert_eq!(config.server.max_upstream_inflight, 256);
     assert_eq!(config.server.shutdown_grace_ms, 2000);
+    assert!(config.server.tcp_enabled);
+    assert_eq!(config.server.tcp_idle_timeout_ms, 2000);
+    assert_eq!(config.server.tcp_max_connections, 128);
+    assert_eq!(config.server.tcp_max_queries_per_conn, 100);
     assert_eq!(config.server.sinkhole_ttl_secs, 60);
     assert_eq!(config.server.acl_action, AclAction::Refuse);
     assert_eq!(config.blocklists.cache_dir, Path::new("cache"));
@@ -250,8 +260,24 @@ fn zero_valued_tunables_are_rejected() {
             "server: { allowed_clients: [\"10.0.0.0/8\"], max_inflight: 0 }\ndefault_policy: {}\n",
         ),
         (
+            "server.max_upstream_inflight",
+            "server: { allowed_clients: [\"10.0.0.0/8\"], max_upstream_inflight: 0 }\ndefault_policy: {}\n",
+        ),
+        (
             "server.shutdown_grace_ms",
             "server: { allowed_clients: [\"10.0.0.0/8\"], shutdown_grace_ms: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "server.tcp_idle_timeout_ms",
+            "server: { allowed_clients: [\"10.0.0.0/8\"], tcp_idle_timeout_ms: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "server.tcp_max_connections",
+            "server: { allowed_clients: [\"10.0.0.0/8\"], tcp_max_connections: 0 }\ndefault_policy: {}\n",
+        ),
+        (
+            "server.tcp_max_queries_per_conn",
+            "server: { allowed_clients: [\"10.0.0.0/8\"], tcp_max_queries_per_conn: 0 }\ndefault_policy: {}\n",
         ),
         (
             "blocklists.fetch_timeout_secs",
