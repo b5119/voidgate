@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags};
 
 use super::action::Action;
 use super::error::StorageError;
@@ -30,6 +30,14 @@ pub struct Stats {
     conn: Connection,
 }
 
+/// Turns an optional `--since` cutoff into a bound parameter.
+///
+/// `None` becomes `i64::MIN`, so `ts >= ?` still matches every row while the
+/// query planner can use the `ts` index as a range constraint.
+fn cutoff(since_ms: Option<i64>) -> i64 {
+    since_ms.unwrap_or(i64::MIN)
+}
+
 impl Stats {
     /// Opens `path` read-only.
     ///
@@ -48,30 +56,36 @@ impl Stats {
         Ok(Self { conn })
     }
 
-    /// Total number of logged queries.
+    /// Total number of logged queries at or after `since_ms` (all rows when
+    /// `since_ms` is `None`).
     ///
     /// # Errors
     ///
     /// Propagates SQLite failures.
-    pub fn total(&self) -> Result<u64, StorageError> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM queries", [], |row| row.get(0))?;
+    pub fn total(&self, since_ms: Option<i64>) -> Result<u64, StorageError> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM queries WHERE ts >= ?1",
+            params![cutoff(since_ms)],
+            |row| row.get(0),
+        )?;
         Ok(count as u64)
     }
 
-    /// Query counts per action, ordered `allowed, blocked, forwarded,
-    /// servfail`.
+    /// Query counts per action at or after `since_ms`, ordered `allowed,
+    /// blocked, forwarded, servfail`.
     ///
     /// # Errors
     ///
     /// Propagates SQLite failures and [`StorageError::UnknownAction`] for a
     /// corrupted `action` column.
-    pub fn counts_by_action(&self) -> Result<Vec<(Action, u64)>, StorageError> {
+    pub fn counts_by_action(
+        &self,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<(Action, u64)>, StorageError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT action, COUNT(*) FROM queries GROUP BY action")?;
-        let rows = stmt.query_map([], |row| {
+            .prepare("SELECT action, COUNT(*) FROM queries WHERE ts >= ?1 GROUP BY action")?;
+        let rows = stmt.query_map(params![cutoff(since_ms)], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
         let mut counts = Vec::new();
@@ -83,19 +97,23 @@ impl Stats {
         Ok(counts)
     }
 
-    /// The `limit` most-blocked domains, most frequent first (ties broken
-    /// alphabetically).
+    /// The `limit` most-blocked domains at or after `since_ms`, most frequent
+    /// first (ties broken alphabetically).
     ///
     /// # Errors
     ///
     /// Propagates SQLite failures.
-    pub fn top_blocked_domains(&self, limit: usize) -> Result<Vec<(String, u64)>, StorageError> {
+    pub fn top_blocked_domains(
+        &self,
+        since_ms: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<(String, u64)>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT domain, COUNT(*) AS n FROM queries \
-             WHERE action = ?1 GROUP BY domain ORDER BY n DESC, domain ASC LIMIT ?2",
+             WHERE action = ?1 AND ts >= ?2 GROUP BY domain ORDER BY n DESC, domain ASC LIMIT ?3",
         )?;
         let rows = stmt.query_map(
-            rusqlite::params![Action::Blocked.as_str(), limit as i64],
+            params![Action::Blocked.as_str(), cutoff(since_ms), limit as i64],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )?;
         let mut domains = Vec::new();
@@ -106,19 +124,20 @@ impl Stats {
         Ok(domains)
     }
 
-    /// Per-client totals, busiest client first (ties broken by address).
+    /// Per-client totals at or after `since_ms`, busiest client first (ties
+    /// broken by address).
     ///
     /// # Errors
     ///
     /// Propagates SQLite failures.
-    pub fn per_client(&self) -> Result<Vec<ClientStat>, StorageError> {
+    pub fn per_client(&self, since_ms: Option<i64>) -> Result<Vec<ClientStat>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT client_ip, COUNT(*), \
              SUM(CASE WHEN action = ?1 THEN 1 ELSE 0 END) \
-             FROM queries GROUP BY client_ip \
+             FROM queries WHERE ts >= ?2 GROUP BY client_ip \
              ORDER BY COUNT(*) DESC, client_ip ASC",
         )?;
-        let rows = stmt.query_map(rusqlite::params![Action::Blocked.as_str()], |row| {
+        let rows = stmt.query_map(params![Action::Blocked.as_str(), cutoff(since_ms)], |row| {
             Ok(ClientStat {
                 client_ip: row.get(0)?,
                 total: row.get::<_, i64>(1)? as u64,

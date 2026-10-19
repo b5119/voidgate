@@ -9,7 +9,7 @@
 //! - [`handler`] — the per-query decision pipeline
 //! - [`server`] — UDP/TCP listeners and lifecycle (SIGHUP, refresh timer)
 //! - [`storage`] — SQLite query log (single writer thread over mpsc)
-//! - [`cli`] — `voidgate run | update-lists | stats`
+//! - [`cli`] — `voidgate run | update-lists | stats | check-config`
 pub mod blocklists;
 pub mod cli;
 pub mod config;

@@ -90,3 +90,23 @@ UDP and TCP share one port. Behaviour that is easy to get wrong:
   retried upstream over TCP within the same overall deadline, yielding the
   full reply.
 
+## CLI (M6)
+
+`voidgate run | update-lists | stats | check-config`, all sharing the global
+`--config <path>` flag (default `config.yaml`).
+
+- **Exit codes**: `0` ok, `1` config/usage error (including a missing query
+  log or `--since` typo), `2` runtime error. Errors are one line plus an
+  actionable `hint:` — never a Rust debug dump. clap usage errors are
+  remapped from clap's default `2` to `1`; `--help`/`--version` stay `0`.
+- **stdout is data, stderr is logs**: `tracing` writes to stderr, so
+  `update-lists` reports, `stats` tables, and `stats --json` never mix with
+  warnings. `stats --json` is parsed by `serde_yaml_ng` in tests (JSON is a
+  YAML subset) — keep it valid JSON.
+- **`stats` is strictly read-only**: it opens the database with
+  `SQLITE_OPEN_READ_ONLY` and checks `db_path.exists()` first, so it never
+  creates the file. `--since` accepts `s`/`m`/`h`/`d` windows; `--top`
+  defaults to 10. Every action is listed even at zero count.
+- **`check-config`** loads and validates only — no sockets, no database — and
+  prints warnings plus `config OK: <path>` to stdout.
+

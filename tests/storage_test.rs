@@ -112,9 +112,9 @@ fn aggregation_counts_top_domains_and_clients() {
     log.shutdown().unwrap();
 
     let stats = Stats::open(&db, 5000).unwrap();
-    assert_eq!(stats.total().unwrap(), 7);
+    assert_eq!(stats.total(None).unwrap(), 7);
     assert_eq!(
-        stats.counts_by_action().unwrap(),
+        stats.counts_by_action(None).unwrap(),
         vec![
             (Action::Allowed, 1),
             (Action::Blocked, 4),
@@ -123,14 +123,14 @@ fn aggregation_counts_top_domains_and_clients() {
         ]
     );
     assert_eq!(
-        stats.top_blocked_domains(2).unwrap(),
+        stats.top_blocked_domains(None, 2).unwrap(),
         vec![
             ("ads.example".to_owned(), 3),
             ("tracker.example".to_owned(), 1),
         ]
     );
     assert_eq!(
-        stats.per_client().unwrap(),
+        stats.per_client(None).unwrap(),
         vec![
             voidgate::storage::ClientStat {
                 client_ip: "10.0.0.1".to_owned(),
@@ -144,6 +144,57 @@ fn aggregation_counts_top_domains_and_clients() {
             },
         ]
     );
+}
+
+#[test]
+fn since_window_excludes_older_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("queries.db");
+    let log = QueryLog::start(&log_config(db.clone(), 64, 1)).unwrap();
+
+    let now = now_ms();
+    let day = 86_400_000;
+    // Two rows inside the last day, one older than that.
+    log.log(row(
+        now - 3_600_000,
+        "10.0.0.1",
+        "fresh.example",
+        Action::Blocked,
+        None,
+    ));
+    log.log(row(
+        now - 7_200_000,
+        "10.0.0.1",
+        "fresh.example",
+        Action::Blocked,
+        None,
+    ));
+    log.log(row(
+        now - 2 * day,
+        "10.0.0.2",
+        "old.example",
+        Action::Blocked,
+        None,
+    ));
+    log.shutdown().unwrap();
+
+    let stats = Stats::open(&db, 5000).unwrap();
+    // No cutoff sees everything.
+    assert_eq!(stats.total(None).unwrap(), 3);
+    // A one-day window drops the two-day-old row.
+    let last_day = Some(now - day);
+    assert_eq!(stats.total(last_day).unwrap(), 2);
+    assert_eq!(
+        stats.counts_by_action(last_day).unwrap(),
+        vec![(Action::Blocked, 2)]
+    );
+    assert_eq!(
+        stats.top_blocked_domains(last_day, 10).unwrap(),
+        vec![("fresh.example".to_owned(), 2)]
+    );
+    assert_eq!(stats.per_client(last_day).unwrap().len(), 1);
+    // A window ending after every row matches nothing.
+    assert_eq!(stats.total(Some(now + 1)).unwrap(), 0);
 }
 
 #[test]
@@ -300,7 +351,7 @@ fn shutdown_flushes_pending_rows() {
     log.shutdown().unwrap();
 
     let stats = Stats::open(&db, 5000).unwrap();
-    assert_eq!(stats.total().unwrap(), 3);
+    assert_eq!(stats.total(None).unwrap(), 3);
 }
 
 #[test]
@@ -323,7 +374,7 @@ fn stats_are_readable_while_the_writer_is_active() {
     let stats = Stats::open(&db, 5000).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if stats.total().unwrap() == 5 {
+        if stats.total(None).unwrap() == 5 {
             break;
         }
         assert!(

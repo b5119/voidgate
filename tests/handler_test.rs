@@ -457,9 +457,9 @@ async fn actions_are_written_to_the_query_log() {
 
     log.shutdown().unwrap();
     let stats = Stats::open(&config.storage.db_path, 1_000).unwrap();
-    assert_eq!(stats.total().unwrap(), 3);
+    assert_eq!(stats.total(None).unwrap(), 3);
     assert_eq!(
-        stats.counts_by_action().unwrap(),
+        stats.counts_by_action(None).unwrap(),
         vec![
             (Action::Allowed, 1),
             (Action::Blocked, 1),
@@ -467,7 +467,7 @@ async fn actions_are_written_to_the_query_log() {
         ]
     );
     assert_eq!(
-        stats.top_blocked_domains(5).unwrap(),
+        stats.top_blocked_domains(None, 5).unwrap(),
         vec![("ads.example".to_owned(), 1)]
     );
 }

@@ -277,9 +277,9 @@ async fn shutdown_flushes_the_query_log() {
     running.stop().await;
 
     let stats = Stats::open(&config.storage.db_path, 1_000).unwrap();
-    assert_eq!(stats.total().unwrap(), 1);
+    assert_eq!(stats.total(None).unwrap(), 1);
     assert_eq!(
-        stats.counts_by_action().unwrap(),
+        stats.counts_by_action(None).unwrap(),
         vec![(Action::Forwarded, 1)]
     );
 }
