@@ -3,6 +3,20 @@
 DNS sinkhole ad blocker with per-device/per-network policies. Rust, single
 crate (`src/lib.rs` + `src/main.rs`), tokio + hickory-proto + rusqlite.
 
+## Repository layout
+
+- `src/config/` — YAML load, defaults, `AppConfig::validate`, warnings.
+- `src/blocklists/` — list parsing, `store` (label-boundary matching), `cache`.
+- `src/policy/` — `PolicyEngine::resolve` and `policy::decide`.
+- `src/resolver/` — upstream forwarding (UDP; TCP on `TC`).
+- `src/handler/` — per-query pipeline (`AppState`, `handle_query`).
+- `src/server/` — UDP/TCP listeners, SIGHUP reload, refresh timer.
+- `src/storage/` — SQLite query log (writer thread) and `stats` queries.
+- `src/cli/` — subcommands and exit-code mapping.
+- `tests/` — integration tests (loopback only, never the real network).
+- `README.md` — user-facing docs; `config.example.yaml` — annotated template.
+- `.github/workflows/ci.yml` — runs the three gates on push and PR.
+
 ## Build and gates
 
 Every milestone must pass all three gates before committing:

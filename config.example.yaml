@@ -15,8 +15,10 @@ server:
     - "192.168.1.0/24"
   # refuse: reply REFUSED | drop: send no response at all
   acl_action: refuse
+  # Recursive resolver that unmatched/allowed names are forwarded to.
   upstream: "1.1.1.1"
   upstream_port: 53
+  # Per-query upstream timeout (ms, must be > 0).
   timeout_ms: 2000
   # Cap on queries handled concurrently (listener semaphore). A packet that
   # arrives while every permit is taken is dropped, not queued.
