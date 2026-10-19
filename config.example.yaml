@@ -5,8 +5,8 @@ server:
   # Bind address. The example serves loopback only; to serve a LAN bind a
   # private address AND keep allowed_clients tight.
   listen: "127.0.0.1"
-  # 5353 for development, 53 in production.
-  port: 5353
+  # 15353 for development, 53 in production. (Avoid 5353 — mDNS.)
+  port: 15353
   # Only these clients may query the server. Required, must not be empty.
   # Clients outside every range are refused (see acl_action).
   allowed_clients:

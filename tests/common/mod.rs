@@ -30,7 +30,7 @@ pub fn minimal_config_yaml() -> String {
     r#"
 server:
   listen: "127.0.0.1"
-  port: 5353
+  port: 15353
   allowed_clients:
     - "127.0.0.0/8"
 blocklists:

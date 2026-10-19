@@ -89,7 +89,7 @@ Write a minimal `config.yaml` (the trimmed example below resolves
 ```yaml
 server:
   listen: "127.0.0.1"
-  port: 5353
+  port: 15353
   allowed_clients: ["127.0.0.0/8", "::1/128"]
   upstream: "1.1.1.1"
 
@@ -120,7 +120,7 @@ required before `run` for `type: url` lists):
 # local-ads: local file (read from source at load, not cached)
 ```
 
-Run the server (it listens on `127.0.0.1:5353` by default):
+Run the server (it listens on `127.0.0.1:15353` by default):
 
 ```sh
 ./target/release/voidgate run --config config.yaml
@@ -129,9 +129,9 @@ Run the server (it listens on `127.0.0.1:5353` by default):
 In another terminal, test it with `dig`:
 
 ```sh
-dig @127.0.0.1 -p 5353 ads.example.com +short      # 0.0.0.0   (blocked)
-dig @127.0.0.1 -p 5353 tracker.example.com +short  # 0.0.0.0   (blocked)
-dig @127.0.0.1 -p 5353 example.com +short          # real IP   (forwarded)
+dig @127.0.0.1 -p 15353 ads.example.com +short      # 0.0.0.0   (blocked)
+dig @127.0.0.1 -p 15353 tracker.example.com +short  # 0.0.0.0   (blocked)
+dig @127.0.0.1 -p 15353 example.com +short          # real IP   (forwarded)
 ```
 
 Then look at what happened:
@@ -152,7 +152,7 @@ problem and warning. Every setting has a default except `server.allowed_clients`
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `listen` | IP address | `127.0.0.1` | Address the UDP/TCP listeners bind to. |
-| `port` | port (> 0) | `5353` | DNS port. Use `53` in production (see [permissions](#pointing-a-device-at-voidgate)). |
+| `port` | port (> 0) | `15353` | DNS port. Use `53` in production (see [permissions](#pointing-a-device-at-voidgate)). |
 | `allowed_clients` | list of CIDR | *(required)* | Clients permitted to query. A client outside every range is refused or dropped per `acl_action`. |
 | `acl_action` | `refuse` \| `drop` | `refuse` | Reply `REFUSED`, or send nothing at all, for clients outside `allowed_clients`. |
 | `upstream` | IP address | `1.1.1.1` | Recursive resolver to forward unmatched names to. |

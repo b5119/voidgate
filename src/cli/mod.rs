@@ -265,7 +265,7 @@ fn format_bind_error(error: &ServerError) -> String {
     };
     let hint = match source.kind() {
         std::io::ErrorKind::PermissionDenied => {
-            "port 53 needs root or CAP_NET_BIND_SERVICE; use a high port (e.g. 5353) for testing"
+            "port 53 needs root or CAP_NET_BIND_SERVICE; use a high port (e.g. 15353) for testing"
         }
         std::io::ErrorKind::AddrInUse => {
             "something already owns the address; on many Linux systems systemd-resolved \

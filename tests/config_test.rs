@@ -27,7 +27,7 @@ fn example_config_loads_without_warnings() {
     );
 
     let config = loaded.config;
-    assert_eq!(config.server.port, 5353);
+    assert_eq!(config.server.port, 15353);
     assert_eq!(config.server.listen, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.server.acl_action, AclAction::Refuse);
     assert_eq!(config.server.sinkhole_ttl_secs, 60);
@@ -59,7 +59,7 @@ default_policy: {}
     let loaded = load(yaml).expect("minimal config should load");
     let config = loaded.config;
 
-    assert_eq!(config.server.port, 5353);
+    assert_eq!(config.server.port, 15353);
     assert_eq!(config.server.listen, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(
         config.server.upstream,

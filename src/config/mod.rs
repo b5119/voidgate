@@ -62,7 +62,7 @@ pub struct ServerConfig {
     /// The example config keeps this on loopback; exposing a sinkhole to a
     /// LAN means binding a private address *and* tightening `allowed_clients`.
     pub listen: IpAddr,
-    /// UDP/TCP port to listen on (`5353` for development, `53` in production).
+    /// UDP/TCP port to listen on (`15353` for development, `53` in production).
     pub port: u16,
     /// CIDR ranges permitted to query the server. Required and must not be
     /// empty: clients outside every range are refused or dropped according to
@@ -110,7 +110,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            port: 5353,
+            port: 15353,
             // Deliberately empty: a config that forgets allowed_clients fails
             // closed (validation error) instead of listening for the world.
             allowed_clients: Vec::new(),
@@ -603,7 +603,7 @@ mod tests {
     fn server_defaults_are_the_documented_ones() {
         let server = ServerConfig::default();
         assert_eq!(server.listen, IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_eq!(server.port, 5353);
+        assert_eq!(server.port, 15353);
         assert!(server.allowed_clients.is_empty());
         assert_eq!(server.upstream, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
         assert_eq!(server.upstream_port, 53);
